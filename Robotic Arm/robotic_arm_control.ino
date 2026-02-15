@@ -1,182 +1,354 @@
 /*
- * Robotic Arm Multi-Servo PWM Controller
+ * Robotic Arm Multi-Servo PWM Controller - Refactored OOP Version
  * Arduino Nano - 4 Servo Control System
  * 
- * Key Mappings (powers of 2 for combination detection):
- * W = 1    (X-axis forward)
- * A = 2    (Z-axis left)
- * S = 4    (X-axis backward)
- * D = 8    (Z-axis right)
- * UP = 16  (Y-axis up)
- * DOWN = 32 (Y-axis down)
- * LEFT = 64 (Gripper open)
- * RIGHT = 128 (Gripper close)
+ * Key Mappings:
+ * A/D = X-axis (servo index 0)
+ * W/S = Y-axis (servo index 1)
+ * LEFT/RIGHT = Z-axis (servo index 2)
+ * UP/DOWN = Grabber (servo index 3)
+ * 
+ * Position Boundaries:
+ * - Lower Bound: 2000 microseconds
+ * - Upper Bound: 1000 microseconds
+ * - Start Position: 1500 microseconds
+ * - Step Size: 20 microseconds
  */
 
-// Servo pin assignments (Arduino Nano digital pins)
-const int SERVO_Z_PIN = 9;   // Z-axis rotation (A/D keys)
-const int SERVO_X_PIN = 10;  // X-axis movement (W/S keys)
-const int SERVO_Y_PIN = 11;  // Y-axis up/down (UP/DOWN keys)
-const int SERVO_GRIPPER_PIN = 6; // Gripper (LEFT/RIGHT keys)
-
-// Servo position ranges (in microseconds)
-const int CENTER = 1500;
-const int MIN_POS = 500;
-const int MAX_POS = 2500;
-
-// Gripper specific positions
-const int GRIPPER_OPEN = 1000;
-const int GRIPPER_CLOSED = 2000;
-const int GRIPPER_CENTER = 1500;
-
-// Movement parameters
-const int STEP_SIZE = 10;  // Speed of servo movement (microseconds per frame)
-const unsigned long FRAME_PERIOD_US = 20000;  // 50 Hz servo refresh rate
-const unsigned long HOLD_TIMEOUT_MS = 150;    // Time before servo locks position
-
-// Current and target positions for each servo
-struct ServoState {
-  int currentPos;
-  int targetPos;
-  int pin;
+// ============================================================================
+// UpdatePosition Class - Handles position updates and boundary checking
+// ============================================================================
+class UpdatePosition {
+  private:
+    int lowerBound;
+    int upperBound;
+    int stepSize;
+    
+  public:
+    // Constructor
+    UpdatePosition(int lower, int upper, int step) {
+      lowerBound = lower;
+      upperBound = upper;
+      stepSize = step;
+    }
+    
+    // Update position based on direction
+    // direction: 1 for positive, -1 for negative, 0 for hold
+    int update(int currentPos, int direction) {
+      if (direction == 0) {
+        return currentPos;  // No movement
+      }
+      
+      int newPos = currentPos + (direction * stepSize);
+      
+      // Boundary checking (note: upper bound is actually smaller value)
+      if (newPos < upperBound) {
+        newPos = upperBound;
+      }
+      if (newPos > lowerBound) {
+        newPos = lowerBound;
+      }
+      
+      return newPos;
+    }
+    
+    // Getters and setters
+    void setStepSize(int newStep) {
+      stepSize = newStep;
+    }
+    
+    int getStepSize() {
+      return stepSize;
+    }
+    
+    void setBounds(int lower, int upper) {
+      lowerBound = lower;
+      upperBound = upper;
+    }
+    
+    int getLowerBound() {
+      return lowerBound;
+    }
+    
+    int getUpperBound() {
+      return upperBound;
+    }
 };
 
-ServoState servoZ = {CENTER, CENTER, SERVO_Z_PIN};
-ServoState servoX = {CENTER, CENTER, SERVO_X_PIN};
-ServoState servoY = {CENTER, CENTER, SERVO_Y_PIN};
-ServoState servoGripper = {GRIPPER_CENTER, GRIPPER_CENTER, SERVO_GRIPPER_PIN};
+// ============================================================================
+// ServoAxis Class - Encapsulates servo control
+// ============================================================================
+class ServoAxis {
+  private:
+    int pin;
+    String axisName;
+    int currentPos;
+    UpdatePosition* positionUpdater;
+    
+  public:
+    // Constructor
+    ServoAxis(int servoPin, String name, int startPos, UpdatePosition* updater) {
+      pin = servoPin;
+      axisName = name;
+      currentPos = startPos;
+      positionUpdater = updater;
+      
+      pinMode(pin, OUTPUT);
+    }
+    
+    // Default constructor
+    ServoAxis() {
+      pin = 0;
+      axisName = "";
+      currentPos = 1500;
+      positionUpdater = nullptr;
+    }
+    
+    // Initialize (for array declaration)
+    void init(int servoPin, String name, int startPos, UpdatePosition* updater) {
+      pin = servoPin;
+      axisName = name;
+      currentPos = startPos;
+      positionUpdater = updater;
+      
+      pinMode(pin, OUTPUT);
+    }
+    
+    // Update position based on direction
+    void updatePosition(int direction) {
+      if (positionUpdater != nullptr) {
+        currentPos = positionUpdater->update(currentPos, direction);
+      }
+    }
+    
+    // Output PWM pulse to servo
+    void outputPWM() {
+      digitalWrite(pin, HIGH);
+      delayMicroseconds(currentPos);
+      digitalWrite(pin, LOW);
+    }
+    
+    // Getters
+    int getCurrentPosition() {
+      return currentPos;
+    }
+    
+    String getAxisName() {
+      return axisName;
+    }
+    
+    int getPin() {
+      return pin;
+    }
+};
 
-unsigned long lastCmdTimeMs = 0;
+// ============================================================================
+// Global Constants
+// ============================================================================
+
+// Servo pin assignments
+const int SERVO_X_PIN = 9;       // X-axis (A/D keys)
+const int SERVO_Y_PIN = 10;      // Y-axis (W/S keys)
+const int SERVO_Z_PIN = 11;      // Z-axis (LEFT/RIGHT keys)
+const int SERVO_GRIPPER_PIN = 6; // Gripper (UP/DOWN keys)
+
+// Position parameters
+const int LOWER_BOUND = 2000;
+const int UPPER_BOUND = 1000;
+const int START_POS = 1500;
+const int STEP_SIZE = 20;
+
+// Timing parameters
+const unsigned long FRAME_PERIOD_US = 20000;  // 50 Hz servo refresh rate
+
+// ============================================================================
+// Global Objects
+// ============================================================================
+
+// Create UpdatePosition objects (one shared for all servos, or individual if needed)
+UpdatePosition posUpdaterX(LOWER_BOUND, UPPER_BOUND, STEP_SIZE);
+UpdatePosition posUpdaterY(LOWER_BOUND, UPPER_BOUND, STEP_SIZE);
+UpdatePosition posUpdaterZ(LOWER_BOUND, UPPER_BOUND, STEP_SIZE);
+UpdatePosition posUpdaterGripper(LOWER_BOUND, UPPER_BOUND, STEP_SIZE);
+
+// Array of 4 servos: [X, Y, Z, Gripper]
+ServoAxis servos[4];
+
+// Movement direction for each servo (1 = positive, -1 = negative, 0 = hold)
+int servoDirections[4] = {0, 0, 0, 0};
+
 unsigned long lastFrameUs = 0;
 
-// Key bit values (powers of 2)
-const int KEY_W = 1;
-const int KEY_A = 2;
-const int KEY_S = 4;
-const int KEY_D = 8;
-const int KEY_UP = 16;
-const int KEY_DOWN = 32;
-const int KEY_LEFT = 64;
-const int KEY_RIGHT = 128;
+// ============================================================================
+// Setup Function
+// ============================================================================
 
 void setup() {
-  // Initialize servo pins
-  pinMode(SERVO_Z_PIN, OUTPUT);
-  pinMode(SERVO_X_PIN, OUTPUT);
-  pinMode(SERVO_Y_PIN, OUTPUT);
-  pinMode(SERVO_GRIPPER_PIN, OUTPUT);
-  
   Serial.begin(9600);
   
-  // Set initial positions
-  servoZ.currentPos = CENTER;
-  servoZ.targetPos = CENTER;
-  servoX.currentPos = CENTER;
-  servoX.targetPos = CENTER;
-  servoY.currentPos = CENTER;
-  servoY.targetPos = CENTER;
-  servoGripper.currentPos = GRIPPER_CENTER;
-  servoGripper.targetPos = GRIPPER_CENTER;
+  // Initialize servo array
+  // Index 0: X-axis (A/D)
+  servos[0].init(SERVO_X_PIN, "X-Axis", START_POS, &posUpdaterX);
   
-  lastCmdTimeMs = millis();
+  // Index 1: Y-axis (W/S)
+  servos[1].init(SERVO_Y_PIN, "Y-Axis", START_POS, &posUpdaterY);
+  
+  // Index 2: Z-axis (LEFT/RIGHT)
+  servos[2].init(SERVO_Z_PIN, "Z-Axis", START_POS, &posUpdaterZ);
+  
+  // Index 3: Gripper (UP/DOWN)
+  servos[3].init(SERVO_GRIPPER_PIN, "Gripper", START_POS, &posUpdaterGripper);
+  
   lastFrameUs = micros();
+  
+  Serial.println("===========================================");
+  Serial.println("Robotic Arm Initialized - OOP Version 2.0");
+  Serial.println("===========================================");
+  Serial.println("Controls:");
+  Serial.println("  X-Axis:  A (decrease) / D (increase)");
+  Serial.println("  Y-Axis:  W (increase) / S (decrease)");
+  Serial.println("  Z-Axis:  [ (decrease) / ] (increase)");
+  Serial.println("  Gripper: - (decrease) / = (increase)");
+  Serial.println("===========================================");
+  Serial.println();
+  
+  // Optional: Customize individual axis step sizes
+  // posUpdaterY.setStepSize(15);  // Make Y-axis move slower
 }
 
+// ============================================================================
+// Main Loop
+// ============================================================================
+
 void loop() {
-  // ---- 1) Read input and determine key combination ----
+  // ---- 1) Read input and set directions ----
   if (Serial.available() > 0) {
-    int keyCombination = Serial.read();
+    char key = Serial.read();
     
-    processKeyCommand(keyCombination);
-    lastCmdTimeMs = millis();
+    // Reset all directions
+    for (int i = 0; i < 4; i++) {
+      servoDirections[i] = 0;
+    }
+    
+    // Process key input
+    processKeyInput(key);
   }
   
-  // ---- 2) If no recent input, lock servos at current position ----
-  if (millis() - lastCmdTimeMs > HOLD_TIMEOUT_MS) {
-    servoZ.targetPos = servoZ.currentPos;
-    servoX.targetPos = servoX.currentPos;
-    servoY.targetPos = servoY.currentPos;
-    servoGripper.targetPos = servoGripper.currentPos;
-  }
-  
-  // ---- 3) Run servo frame at 50 Hz ----
+  // ---- 2) Run servo frame at 50 Hz ----
   unsigned long nowUs = micros();
   if (nowUs - lastFrameUs >= FRAME_PERIOD_US) {
     lastFrameUs += FRAME_PERIOD_US;
     
     // Update and output all servos
-    updateAndOutputServo(servoZ);
-    updateAndOutputServo(servoX);
-    updateAndOutputServo(servoY);
-    updateAndOutputServo(servoGripper);
+    for (int i = 0; i < 4; i++) {
+      servos[i].updatePosition(servoDirections[i]);
+      servos[i].outputPWM();
+    }
   }
 }
 
-void processKeyCommand(int keyCombination) {
-  // Z-axis control (A/D keys - bits 2 and 8)
-  if (keyCombination & KEY_A) {
-    servoZ.targetPos = MIN_POS;  // Rotate left
-  }
-  if (keyCombination & KEY_D) {
-    servoZ.targetPos = MAX_POS;  // Rotate right
-  }
-  
-  // X-axis control (W/S keys - bits 1 and 4)
-  if (keyCombination & KEY_W) {
-    servoX.targetPos = MAX_POS;  // Move forward
-  }
-  if (keyCombination & KEY_S) {
-    servoX.targetPos = MIN_POS;  // Move backward
-  }
-  
-  // Y-axis control (UP/DOWN keys - bits 16 and 32)
-  if (keyCombination & KEY_UP) {
-    servoY.targetPos = MAX_POS;  // Move up
-  }
-  if (keyCombination & KEY_DOWN) {
-    servoY.targetPos = MIN_POS;  // Move down
-  }
-  
-  // Gripper control (LEFT/RIGHT keys - bits 64 and 128)
-  if (keyCombination & KEY_LEFT) {
-    servoGripper.targetPos = GRIPPER_OPEN;  // Open gripper
-  }
-  if (keyCombination & KEY_RIGHT) {
-    servoGripper.targetPos = GRIPPER_CLOSED;  // Close gripper
-  }
-  
-  // Handle special combinations if needed
-  // Example: W + D pressed together = 1 + 8 = 9
-  // You can add specific behaviors for certain combinations here
-  if (keyCombination == (KEY_W | KEY_D)) {
-    // Diagonal forward-right movement
-    servoX.targetPos = MAX_POS;
-    servoZ.targetPos = MAX_POS;
+// ============================================================================
+// Key Input Processing
+// ============================================================================
+
+void processKeyInput(char key) {
+  switch (key) {
+    // X-Axis control (A/D)
+    case 'a':
+    case 'A':
+      servoDirections[0] = -1;  // Decrease
+      Serial.print("X-Axis: ");
+      Serial.println(servos[0].getCurrentPosition());
+      break;
+      
+    case 'd':
+    case 'D':
+      servoDirections[0] = 1;   // Increase
+      Serial.print("X-Axis: ");
+      Serial.println(servos[0].getCurrentPosition());
+      break;
+    
+    // Y-Axis control (W/S)
+    case 'w':
+    case 'W':
+      servoDirections[1] = 1;   // Increase
+      Serial.print("Y-Axis: ");
+      Serial.println(servos[1].getCurrentPosition());
+      break;
+      
+    case 's':
+    case 'S':
+      servoDirections[1] = -1;  // Decrease
+      Serial.print("Y-Axis: ");
+      Serial.println(servos[1].getCurrentPosition());
+      break;
+    
+    // Z-Axis control (LEFT/RIGHT represented as [ and ])
+    case '[':  // LEFT key
+      servoDirections[2] = -1;  // Decrease
+      Serial.print("Z-Axis: ");
+      Serial.println(servos[2].getCurrentPosition());
+      break;
+      
+    case ']':  // RIGHT key
+      servoDirections[2] = 1;   // Increase
+      Serial.print("Z-Axis: ");
+      Serial.println(servos[2].getCurrentPosition());
+      break;
+    
+    // Gripper control (UP/DOWN represented as - and =)
+    case '-':  // DOWN key
+      servoDirections[3] = -1;  // Decrease (close)
+      Serial.print("Gripper: ");
+      Serial.println(servos[3].getCurrentPosition());
+      break;
+      
+    case '=':  // UP key
+      servoDirections[3] = 1;   // Increase (open)
+      Serial.print("Gripper: ");
+      Serial.println(servos[3].getCurrentPosition());
+      break;
+    
+    // Status display
+    case 'p':
+    case 'P':
+      printStatus();
+      break;
+    
+    // Reset all servos to start position
+    case 'r':
+    case 'R':
+      resetAllServos();
+      break;
+      
+    default:
+      // Unknown key - do nothing
+      break;
   }
 }
 
-void updateAndOutputServo(ServoState &servo) {
-  // Ramp current position toward target position
-  if (servo.currentPos < servo.targetPos) {
-    servo.currentPos += STEP_SIZE;
-    if (servo.currentPos > servo.targetPos) {
-      servo.currentPos = servo.targetPos;
-    }
-  } else if (servo.currentPos > servo.targetPos) {
-    servo.currentPos -= STEP_SIZE;
-    if (servo.currentPos < servo.targetPos) {
-      servo.currentPos = servo.targetPos;
-    }
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+void printStatus() {
+  Serial.println("\n=== Current Servo Positions ===");
+  for (int i = 0; i < 4; i++) {
+    Serial.print(servos[i].getAxisName());
+    Serial.print(": ");
+    Serial.print(servos[i].getCurrentPosition());
+    Serial.println(" us");
   }
-  
-  // Clamp to safe bounds
-  int clampedPos = servo.currentPos;
-  if (clampedPos < MIN_POS) clampedPos = MIN_POS;
-  if (clampedPos > MAX_POS) clampedPos = MAX_POS;
-  
-  // Output PWM pulse
-  digitalWrite(servo.pin, HIGH);
-  delayMicroseconds(clampedPos);
-  digitalWrite(servo.pin, LOW);
-  // Note: The remaining LOW time is handled by the frame timing
+  Serial.println("================================\n");
+}
+
+void resetAllServos() {
+  Serial.println("Resetting all servos to start position...");
+  for (int i = 0; i < 4; i++) {
+    servos[i].init(servos[i].getPin(), servos[i].getAxisName(), START_POS, 
+                   (i == 0) ? &posUpdaterX : 
+                   (i == 1) ? &posUpdaterY : 
+                   (i == 2) ? &posUpdaterZ : &posUpdaterGripper);
+  }
+  printStatus();
 }

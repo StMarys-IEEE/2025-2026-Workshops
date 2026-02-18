@@ -9,6 +9,9 @@ import time
 import threading
 import importlib.util
 from pathlib import Path
+import py_compile
+from datetime import datetime
+import os
 import os
 from arm import RoboticArm
 
@@ -168,6 +171,16 @@ class TeleopController:
             print("[TESLA] ERROR: run_program.py not found in controller directory")
             return
 
+        # Syntax-check the student file before loading
+        try:
+            py_compile.compile(str(rp_path), doraise=True)
+        except py_compile.PyCompileError as e:
+            print(f"[TESLA] SYNTAX ERROR in run_program.py: {e.msg}")
+            return
+        except Exception as e:
+            print(f"[TESLA] Error compiling run_program.py: {e}")
+            return
+
         try:
             spec = importlib.util.spec_from_file_location('run_program', str(rp_path))
             rp_mod = importlib.util.module_from_spec(spec)
@@ -176,6 +189,14 @@ class TeleopController:
         except Exception as e:
             print(f"[TESLA] ERROR loading run_program.py: {e}")
             return
+
+        # Print info about the loaded file (filename, modified time, size)
+        try:
+            mtime = datetime.fromtimestamp(os.path.getmtime(rp_path)).isoformat(sep=' ', timespec='seconds')
+            fsize = os.path.getsize(rp_path)
+            print(f"[TESLA] Loaded {rp_path.name} (modified: {mtime}, size: {fsize} bytes)")
+        except Exception:
+            pass
 
         if not prog:
             print("[TESLA] ERROR: no `program(arm)` function defined in run_program.py")

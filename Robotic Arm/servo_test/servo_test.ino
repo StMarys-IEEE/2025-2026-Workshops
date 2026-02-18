@@ -128,6 +128,21 @@ class ServoAxis {
       digitalWrite(pin, LOW);
     }
     
+    // Set absolute position (clamped to bounds)
+    void setCurrentPosition(int pos) {
+      if (positionUpdater != nullptr) {
+        int upper = positionUpdater->getUpperBound();
+        int lower = positionUpdater->getLowerBound();
+        if (pos < upper) {
+          pos = upper;
+        }
+        if (pos > lower) {
+          pos = lower;
+        }
+      }
+      currentPos = pos;
+    }
+    
     // Getters
     int getCurrentPosition() {
       return currentPos;
@@ -221,17 +236,19 @@ void setup() {
 // ============================================================================
 
 void loop() {
-  // ---- 1) Read bitmapped input and set directions ----
-  // Expect: START byte (0xAA) followed by flags byte
-  // Bit mapping (from Python):
-  // bit0=W(Y+), bit1=S(Y-), bit2=A(X-), bit3=D(X+), 
-  // bit4=[Z-], bit5=](Z+), bit6=+(Gripper+), bit7=-(Gripper-)
+  // ---- 1) Read and dispatch packets ----
+  // Multiple protocols supported:
+  // 0xAA <flags>           - Teleop bitmapped input
+  // 0xAB <axis> <h> <l>    - Delta microseconds (signed int16)
+  // 0xAC <axis> <h> <l>    - Absolute position (unsigned uint16)
+  // 0xAD                   - STOP command
   
-  if (Serial.available() >= 2) {
-    byte startByte = Serial.read();
+  if (Serial.available() >= 1) {
+    byte packetType = Serial.peek();  // Peek to check type
     
-    if (startByte == 0xAA) {
-      // Valid start byte, read flags
+    // ---- TELEOP PACKET (0xAA) ----
+    if (packetType == 0xAA && Serial.available() >= 2) {
+      Serial.read();  // Consume 0xAA
       byte flags = Serial.read();
       
       // Reset all directions
@@ -255,6 +272,54 @@ void loop() {
       // Servo 3 (Gripper): bit7=minus(decrease), bit6=plus(increase)
       if (flags & (1 << 7)) servoDirections[3] = -1;  // - pressed
       if (flags & (1 << 6)) servoDirections[3] = 1;   // + pressed
+    }
+    
+    // ---- DELTA PACKET (0xAB) ----
+    // Need start + axis + hi + lo => 4 bytes total available
+    else if (packetType == 0xAB && Serial.available() >= 4) {
+      Serial.read();  // Consume 0xAB
+      byte axis = Serial.read();
+      byte deltaHi = Serial.read();
+      byte deltaLo = Serial.read();
+      
+      if (axis >= 0 && axis <= 3) {
+        // Reconstruct signed int16 delta
+        int16_t delta = ((int16_t)deltaHi << 8) | deltaLo;
+        int newPos = servos[axis].getCurrentPosition() + delta;
+        servos[axis].setCurrentPosition(newPos);
+        Serial.println("OK");
+      } else {
+        Serial.println("ERR BAD_AXIS");
+      }
+    }
+    
+    // ---- ABSOLUTE POSITION PACKET (0xAC) ----
+    // Need start + axis + hi + lo => 4 bytes total available
+    else if (packetType == 0xAC && Serial.available() >= 4) {
+      Serial.read();  // Consume 0xAC
+      byte axis = Serial.read();
+      byte posHi = Serial.read();
+      byte posLo = Serial.read();
+      
+      if (axis >= 0 && axis <= 3) {
+        // Reconstruct unsigned uint16 position
+        uint16_t pos = ((uint16_t)posHi << 8) | posLo;
+        servos[axis].setCurrentPosition((int)pos);
+        Serial.println("OK");
+      } else {
+        Serial.println("ERR BAD_AXIS");
+      }
+    }
+    
+    // ---- STOP PACKET (0xAD) ----
+    else if (packetType == 0xAD) {
+      Serial.read();  // Consume 0xAD
+      
+      // Stop all motion: set all directions to 0
+      for (int i = 0; i < 4; i++) {
+        servoDirections[i] = 0;
+      }
+      Serial.println("OK");
     }
   }
   

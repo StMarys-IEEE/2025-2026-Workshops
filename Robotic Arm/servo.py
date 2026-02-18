@@ -3,7 +3,7 @@ import keyboard
 import time
 
 # 1) Connect to Arduino
-ser = serial.Serial('COM7', 9600)
+ser = serial.Serial('COM6', 9600)
 time.sleep(2)  # Arduino often resets when serial opens
 
 # 2) Constants

@@ -16,6 +16,24 @@ Here you’ll find:
   Based on [HiBit’s buzzer repo](https://github.com/hibit-dev/buzzer) (MIT License, © 2022 HiBit).  
   You’ll find both starter and complete versions inside `workshops/buzzer/`.  
 
+- **Robotic Arm Workshop**  
+  A hands-on workshop teaching serial-controlled servo robotics using an Arduino Nano and a Python controller. The workshop folder `Robotic Arm/` includes:
+  - `servo_test/servo_test.ino` — Arduino sketch to upload
+  - `arm.py` and `teleop_keyboard.py` — PC-side controller and API
+  - `run_program.py` — student script (edit to write robotic routines)
+  - `demos/` — example student programs you can drop in
+
+  Quick start (students):
+
+  ```bash
+  cd "Robotic Arm"
+  pip install pyserial keyboard
+  python teleop_keyboard.py
+  # enter COM number when prompted (e.g., 3 for COM3)
+  # use WASD + arrow keys to manually control
+  # press `t` to run the latest run_program.py (copy from USB)
+  ```
+
 ---
 
 ## Licensing
